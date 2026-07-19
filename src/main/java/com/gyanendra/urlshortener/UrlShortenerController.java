@@ -2,6 +2,8 @@ package com.gyanendra.urlshortener;
 
 import java.net.URI;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -30,8 +32,10 @@ class UrlShortenerController {
             throw new UrlShortenerService.InvalidRequestException("request body is required");
         }
 
+        String url = requiredText(request.url(), "url");
+        String customAlias = optionalText(request.customAlias(), "custom_alias");
         UrlShortenerService.ShortenResult result =
-                service.shorten(request.url(), request.customAlias());
+                service.shorten(url, customAlias);
         UrlMapping mapping = result.mapping();
         ShortenResponse response = new ShortenResponse(
                 mapping.shortCode(),
@@ -55,10 +59,27 @@ class UrlShortenerController {
         return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }
 
-    record ShortenRequest(String url, String customAlias) {
+    private static String requiredText(JsonNode value, String field) {
+        if (value == null || !value.isTextual()) {
+            throw new UrlShortenerService.InvalidRequestException(
+                    field + " must be a non-empty string");
+        }
+        return value.textValue();
+    }
+
+    private static String optionalText(JsonNode value, String field) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (!value.isTextual()) {
+            throw new UrlShortenerService.InvalidRequestException(field + " must be a string");
+        }
+        return value.textValue();
+    }
+
+    record ShortenRequest(JsonNode url, JsonNode customAlias) {
     }
 
     record ShortenResponse(String code, String shortUrl, String url, boolean created) {
     }
 }
-

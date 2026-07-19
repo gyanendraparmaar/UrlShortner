@@ -6,8 +6,6 @@ spring:
   jackson:
     property-naming-strategy: SNAKE_CASE
     default-property-inclusion: non_null
-    mapper:
-      allow-coercion-of-scalars: false
 
 app:
   base-url: ${BASE_URL:http://localhost:8080}
