@@ -93,7 +93,7 @@ Make sure Docker is running, then execute:
 ./mvnw test
 ```
 
-The suite includes service and controller tests plus Testcontainers integration tests against PostgreSQL 17. It covers Base62 boundaries, URL validation and normalization, generated and custom codes, duplicates, conflicting aliases, malformed JSON, 301 redirects, 404 responses, persistence, and a custom/generated code collision.
+The suite includes service and controller tests plus Testcontainers integration tests against PostgreSQL 17.10. It covers Base62 boundaries, URL validation and normalization, generated and custom codes, concurrent duplicates, conflicting aliases, malformed JSON, 301 redirects, 404 responses, application-context restart persistence, and a custom/generated code collision.
 
 Build the runnable JAR with:
 

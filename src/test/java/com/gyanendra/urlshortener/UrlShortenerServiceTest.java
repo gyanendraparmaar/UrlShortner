@@ -47,7 +47,10 @@ class UrlShortenerServiceTest {
         return Stream.of(
                 Arguments.of("HTTPS://Example.COM:443/a?q=1#part", "https://example.com/a?q=1#part"),
                 Arguments.of("http://Example.com:80", "http://example.com"),
-                Arguments.of("https://example.com:8443/path", "https://example.com:8443/path"));
+                Arguments.of("https://example.com:8443/path", "https://example.com:8443/path"),
+                Arguments.of(
+                        "https://Example.com/a%20b?q=a%2Fb#x%20y",
+                        "https://example.com/a%20b?q=a%2Fb#x%20y"));
     }
 
     @ParameterizedTest
@@ -67,6 +70,7 @@ class UrlShortenerServiceTest {
                 "https://user:secret@example.com",
                 "https://example.com:0",
                 "https://example.com:99999",
+                "https://example.com:",
                 "https://example.com/a path");
     }
 
@@ -101,6 +105,8 @@ class UrlShortenerServiceTest {
         when(repository.nextId()).thenReturn(SEVEN_CHARACTER_START, SEVEN_CHARACTER_START + 1);
         when(repository.insertGenerated(SEVEN_CHARACTER_START, "1000000", url))
                 .thenReturn(Optional.empty());
+        when(repository.findByShortCode("1000000"))
+                .thenReturn(Optional.of(new UrlMapping("1000000", "https://other.example")));
         when(repository.insertGenerated(SEVEN_CHARACTER_START + 1, "1000001", url))
                 .thenReturn(Optional.of(inserted));
 
@@ -124,6 +130,17 @@ class UrlShortenerServiceTest {
                 () -> service.shorten(url, "myAlias"));
     }
 
+    @Test
+    void refusesToGenerateAnEightCharacterCode() {
+        String url = "https://example.com/capacity";
+        when(repository.findByLongUrl(url)).thenReturn(Optional.empty());
+        when(repository.nextId()).thenReturn(3_521_614_606_208L);
+
+        assertThrows(
+                UrlShortenerService.CodeGenerationException.class,
+                () -> service.shorten(url, null));
+    }
+
     @ParameterizedTest
     @MethodSource("invalidAliases")
     void rejectsInvalidAliases(String alias) {
@@ -136,4 +153,3 @@ class UrlShortenerServiceTest {
         return Stream.of("", "ab", "contains-dash", "contains space", "a".repeat(33));
     }
 }
-

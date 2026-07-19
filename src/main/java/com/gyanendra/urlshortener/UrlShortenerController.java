@@ -1,6 +1,7 @@
 package com.gyanendra.urlshortener;
 
 import java.net.URI;
+import java.net.URISyntaxException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -23,7 +24,7 @@ class UrlShortenerController {
             UrlShortenerService service,
             @Value("${app.base-url}") String baseUrl) {
         this.service = service;
-        this.baseUrl = stripTrailingSlash(baseUrl);
+        this.baseUrl = validateBaseUrl(baseUrl);
     }
 
     @PostMapping(path = "/shorten", consumes = "application/json", produces = "application/json")
@@ -55,8 +56,30 @@ class UrlShortenerController {
                 .build();
     }
 
-    private static String stripTrailingSlash(String value) {
-        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
+    private static String validateBaseUrl(String value) {
+        try {
+            URI parsed = new URI(value);
+            String scheme = parsed.getScheme();
+            if (scheme == null
+                    || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
+                    || parsed.getHost() == null
+                    || parsed.getUserInfo() != null
+                    || parsed.getQuery() != null
+                    || parsed.getFragment() != null
+                    || parsed.getPort() == 0
+                    || parsed.getPort() > 65535
+                    || parsed.getRawAuthority().endsWith(":")) {
+                throw new IllegalArgumentException("app.base-url must be an absolute HTTP(S) URL");
+            }
+
+            String normalized = parsed.toASCIIString();
+            while (normalized.endsWith("/")) {
+                normalized = normalized.substring(0, normalized.length() - 1);
+            }
+            return normalized;
+        } catch (NullPointerException | URISyntaxException exception) {
+            throw new IllegalArgumentException("app.base-url must be an absolute HTTP(S) URL", exception);
+        }
     }
 
     private static String requiredText(JsonNode value, String field) {

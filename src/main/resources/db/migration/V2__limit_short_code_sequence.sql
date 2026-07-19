@@ -1,0 +1,2 @@
+ALTER SEQUENCE short_code_sequence
+    MAXVALUE 3521614606207;

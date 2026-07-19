@@ -38,6 +38,11 @@ class ApiExceptionHandler {
         return error(HttpStatus.NOT_FOUND, "not_found", exception.getMessage(), null);
     }
 
+    @ExceptionHandler(UrlShortenerService.CodeGenerationException.class)
+    ResponseEntity<ApiError> codeGeneration(UrlShortenerService.CodeGenerationException exception) {
+        return error(HttpStatus.SERVICE_UNAVAILABLE, "code_generation_unavailable", exception.getMessage(), null);
+    }
+
     private static ResponseEntity<ApiError> error(
             HttpStatus status,
             String error,

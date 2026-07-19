@@ -10,7 +10,7 @@ My main contribution was direction and judgment. I required Java and chose Postg
 
 The AI first proposed Python, Flask, and SQLite because they were the shortest route to a working take-home. I rejected that plan and required Java with PostgreSQL so the solution matched the stack I wanted to demonstrate. I kept Spring Boot and plain JDBC but rejected adding Redis, Aerospike, or Kafka merely because they were available; none contributes to the required write/redirect path at this scale.
 
-Testing also caused a concrete correction. The first generated controller relied on a Jackson configuration flag to reject a numeric JSON `url`. A test showed that Jackson still coerced the number to a string. That assumption was discarded and the controller now checks JSON node types explicitly before invoking the service. The remote repository also contained an initial README commit that was absent locally; instead of force-pushing it away, I preserved it with a merge and replaced its placeholder content in the documentation stage.
+Testing also caused concrete corrections. The first generated controller relied on a Jackson configuration flag to reject a numeric JSON `url`; a test showed that Jackson still coerced it to a string, so the controller now checks JSON node types explicitly. A later adversarial review found that rebuilding a URI from already-escaped components doubled percent signs, and that Spring's default `/error` route shadowed the valid custom alias `error`. I replaced the URI reconstruction, moved Spring's internal error path outside the alias alphabet, bounded generation retries, capped the sequence at seven characters, and added real concurrency and restart tests.
 
 ## 3. The two or three biggest trade-offs, and the alternatives considered
 

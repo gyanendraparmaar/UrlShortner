@@ -1,5 +1,6 @@
 package com.gyanendra.urlshortener;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -126,5 +127,28 @@ class UrlShortenerControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("url is malformed"));
     }
-}
 
+    @Test
+    void rejectsUnknownJsonFields() throws Exception {
+        mockMvc.perform(post("/shorten")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"url":"https://example.com","custom_alia":"typo"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"));
+    }
+
+    @Test
+    void rejectsAnInvalidConfiguredBaseUrl() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new UrlShortenerController(service, "relative/path"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new UrlShortenerController(service, "https://sho.rt/path?query=bad"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new UrlShortenerController(service, "https://sho.rt:"));
+    }
+}

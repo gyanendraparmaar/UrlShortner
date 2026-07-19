@@ -16,6 +16,8 @@ class UrlShortenerService {
             "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
     private static final Pattern CUSTOM_ALIAS = Pattern.compile("^[0-9A-Za-z]{3,32}$");
     private static final int MAX_URL_LENGTH = 2048;
+    private static final int MAX_GENERATION_ATTEMPTS = 100;
+    private static final long EIGHT_CHARACTER_START = 3_521_614_606_208L;
 
     private final UrlMappingRepository repository;
 
@@ -46,8 +48,11 @@ class UrlShortenerService {
     }
 
     private ShortenResult createGenerated(String normalizedUrl) {
-        while (true) {
+        for (int attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt++) {
             long id = repository.nextId();
+            if (id >= EIGHT_CHARACTER_START) {
+                throw new CodeGenerationException("seven-character code space is exhausted");
+            }
             String code = encodeBase62(id);
             Optional<UrlMapping> inserted = repository.insertGenerated(id, code, normalizedUrl);
             if (inserted.isPresent()) {
@@ -58,8 +63,12 @@ class UrlShortenerService {
             if (concurrentDuplicate.isPresent()) {
                 return new ShortenResult(concurrentDuplicate.get(), false);
             }
-            // A custom alias claimed this Base62 value. The next sequence ID is still unique.
+            if (repository.findByShortCode(code).isEmpty()) {
+                throw new CodeGenerationException("database rejected a unique generated mapping");
+            }
+            // A custom alias claimed this Base62 value. Try the next sequence ID.
         }
+        throw new CodeGenerationException("too many generated codes are occupied by custom aliases");
     }
 
     private ShortenResult createCustom(String normalizedUrl, String customAlias) {
@@ -108,7 +117,9 @@ class UrlShortenerService {
             if (parsed.getUserInfo() != null) {
                 throw new InvalidRequestException("url must not include credentials");
             }
-            if (parsed.getPort() == 0 || parsed.getPort() > 65535) {
+            if (parsed.getPort() == 0
+                    || parsed.getPort() > 65535
+                    || parsed.getRawAuthority().endsWith(":")) {
                 throw new InvalidRequestException("url contains an invalid port");
             }
 
@@ -116,15 +127,10 @@ class UrlShortenerService {
             int normalizedPort = isDefaultPort(normalizedScheme, parsed.getPort())
                     ? -1
                     : parsed.getPort();
-            URI normalized = new URI(
+            String normalizedUrl = rebuildWithRawComponents(
+                    parsed,
                     normalizedScheme,
-                    null,
-                    parsed.getHost().toLowerCase(Locale.ROOT),
-                    normalizedPort,
-                    parsed.getRawPath(),
-                    parsed.getRawQuery(),
-                    parsed.getRawFragment());
-            String normalizedUrl = normalized.toASCIIString();
+                    normalizedPort).toASCIIString();
             if (normalizedUrl.length() > MAX_URL_LENGTH) {
                 throw new InvalidRequestException("url must be at most 2048 characters after normalization");
             }
@@ -153,6 +159,27 @@ class UrlShortenerService {
     private static boolean isDefaultPort(String scheme, int port) {
         return (scheme.equals("http") && port == 80)
                 || (scheme.equals("https") && port == 443);
+    }
+
+    private static URI rebuildWithRawComponents(URI parsed, String scheme, int port)
+            throws URISyntaxException {
+        StringBuilder normalized = new StringBuilder()
+                .append(scheme)
+                .append("://")
+                .append(parsed.getHost().toLowerCase(Locale.ROOT));
+        if (port != -1) {
+            normalized.append(':').append(port);
+        }
+        if (parsed.getRawPath() != null) {
+            normalized.append(parsed.getRawPath());
+        }
+        if (parsed.getRawQuery() != null) {
+            normalized.append('?').append(parsed.getRawQuery());
+        }
+        if (parsed.getRawFragment() != null) {
+            normalized.append('#').append(parsed.getRawFragment());
+        }
+        return new URI(normalized.toString());
     }
 
     private static void validateAlias(String customAlias) {
@@ -194,5 +221,10 @@ class UrlShortenerService {
             super("short code '" + code + "' was not found");
         }
     }
-}
 
+    static class CodeGenerationException extends RuntimeException {
+        CodeGenerationException(String message) {
+            super(message);
+        }
+    }
+}
