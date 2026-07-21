@@ -35,19 +35,11 @@ class UrlMappingRepository {
                 shortCode));
     }
 
-    long nextId() {
-        Long id = jdbcTemplate.queryForObject("SELECT nextval('short_code_sequence')", Long.class);
-        if (id == null) {
-            throw new IllegalStateException("The short-code sequence returned no value");
-        }
-        return id;
-    }
-
-    Optional<UrlMapping> insertGenerated(long id, String shortCode, String longUrl) {
+    Optional<UrlMapping> insertGenerated(String shortCode, String longUrl) {
         return insert(
-                "INSERT INTO url_mappings (id, short_code, long_url) VALUES (?, ?, ?) "
+                "INSERT INTO url_mappings (short_code, long_url) VALUES (?, ?) "
                         + "ON CONFLICT DO NOTHING" + RETURNING_COLUMNS,
-                id, shortCode, longUrl);
+                shortCode, longUrl);
     }
 
     Optional<UrlMapping> insertCustom(String shortCode, String longUrl) {
@@ -70,4 +62,3 @@ class UrlMappingRepository {
         return mappings.stream().findFirst();
     }
 }
-

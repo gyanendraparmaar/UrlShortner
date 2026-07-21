@@ -5,10 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.Optional;
+import java.util.random.RandomGenerator;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
@@ -18,23 +20,19 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 class UrlShortenerServiceTest {
 
-    private static final long SEVEN_CHARACTER_START = 56_800_235_584L;
-
     private final UrlMappingRepository repository = mock(UrlMappingRepository.class);
-    private final UrlShortenerService service = new UrlShortenerService(repository);
+    private final ShortCodeGenerator codeGenerator = mock(ShortCodeGenerator.class);
+    private final UrlShortenerService service = new UrlShortenerService(repository, codeGenerator);
 
     @Test
-    void encodesBase62UsingTheAlexXuAlphabet() {
-        assertEquals("0", UrlShortenerService.encodeBase62(0));
-        assertEquals("Z", UrlShortenerService.encodeBase62(61));
-        assertEquals("10", UrlShortenerService.encodeBase62(62));
-        assertEquals("2TX", UrlShortenerService.encodeBase62(11_157));
-        assertEquals("1000000", UrlShortenerService.encodeBase62(SEVEN_CHARACTER_START));
-    }
+    void generatesElevenBase62CharactersFromAnInjectableRandomSource() {
+        RandomGenerator random = mock(RandomGenerator.class);
+        when(random.nextInt(62)).thenReturn(0, 9, 10, 35, 36, 61, 1, 11, 37, 60, 2);
 
-    @Test
-    void rejectsNegativeBase62Values() {
-        assertThrows(IllegalArgumentException.class, () -> UrlShortenerService.encodeBase62(-1));
+        String code = new ShortCodeGenerator(random).generate();
+
+        assertEquals("09azAZ1bBY2", code);
+        assertEquals(ShortCodeGenerator.CODE_LENGTH, code.length());
     }
 
     @ParameterizedTest
@@ -76,7 +74,7 @@ class UrlShortenerServiceTest {
 
     @Test
     void returnsTheExistingCodeForADuplicateUrl() {
-        UrlMapping existing = new UrlMapping("1000000", "https://example.com");
+        UrlMapping existing = new UrlMapping("0aA1bB2cC3d", "https://example.com");
         when(repository.findByLongUrl("https://example.com")).thenReturn(Optional.of(existing));
 
         UrlShortenerService.ShortenResult result = service.shorten("HTTPS://EXAMPLE.COM:443", null);
@@ -98,24 +96,24 @@ class UrlShortenerServiceTest {
     }
 
     @Test
-    void skipsACodeAlreadyClaimedByACustomAlias() {
+    void retriesWhenAGeneratedCandidateIsAlreadyClaimed() {
         String url = "https://example.com/new";
-        UrlMapping inserted = new UrlMapping("1000001", url);
+        String firstCandidate = "0aA1bB2cC3d";
+        String secondCandidate = "4eE5fF6gG7h";
+        UrlMapping inserted = new UrlMapping(secondCandidate, url);
         when(repository.findByLongUrl(url)).thenReturn(Optional.empty(), Optional.empty());
-        when(repository.nextId()).thenReturn(SEVEN_CHARACTER_START, SEVEN_CHARACTER_START + 1);
-        when(repository.insertGenerated(SEVEN_CHARACTER_START, "1000000", url))
-                .thenReturn(Optional.empty());
-        when(repository.findByShortCode("1000000"))
-                .thenReturn(Optional.of(new UrlMapping("1000000", "https://other.example")));
-        when(repository.insertGenerated(SEVEN_CHARACTER_START + 1, "1000001", url))
-                .thenReturn(Optional.of(inserted));
+        when(codeGenerator.generate()).thenReturn(firstCandidate, secondCandidate);
+        when(repository.insertGenerated(firstCandidate, url)).thenReturn(Optional.empty());
+        when(repository.findByShortCode(firstCandidate))
+                .thenReturn(Optional.of(new UrlMapping(firstCandidate, "https://other.example")));
+        when(repository.insertGenerated(secondCandidate, url)).thenReturn(Optional.of(inserted));
 
         UrlShortenerService.ShortenResult result = service.shorten(url, null);
 
         assertTrue(result.created());
-        assertEquals("1000001", result.mapping().shortCode());
-        verify(repository).insertGenerated(SEVEN_CHARACTER_START, "1000000", url);
-        verify(repository).insertGenerated(SEVEN_CHARACTER_START + 1, "1000001", url);
+        assertEquals(secondCandidate, result.mapping().shortCode());
+        verify(repository).insertGenerated(firstCandidate, url);
+        verify(repository).insertGenerated(secondCandidate, url);
     }
 
     @Test
@@ -131,14 +129,38 @@ class UrlShortenerServiceTest {
     }
 
     @Test
-    void refusesToGenerateAnEightCharacterCode() {
-        String url = "https://example.com/capacity";
+    void failsAfterTheBoundedNumberOfCandidateCollisions() {
+        String url = "https://example.com/exhausted";
         when(repository.findByLongUrl(url)).thenReturn(Optional.empty());
-        when(repository.nextId()).thenReturn(3_521_614_606_208L);
+        when(codeGenerator.generate()).thenReturn("0aA1bB2cC3d");
+        when(repository.insertGenerated("0aA1bB2cC3d", url)).thenReturn(Optional.empty());
+        when(repository.findByShortCode("0aA1bB2cC3d"))
+                .thenReturn(Optional.of(new UrlMapping(
+                        "0aA1bB2cC3d", "https://other.example")));
 
-        assertThrows(
+        UrlShortenerService.CodeGenerationException exception = assertThrows(
                 UrlShortenerService.CodeGenerationException.class,
                 () -> service.shorten(url, null));
+
+        assertEquals("unable to allocate a unique short code after 100 attempts", exception.getMessage());
+        verify(codeGenerator, times(100)).generate();
+    }
+
+    @Test
+    void failsImmediatelyWhenTheDatabaseRejectsAUniqueMapping() {
+        String url = "https://example.com/database-error";
+        String candidate = "0aA1bB2cC3d";
+        when(repository.findByLongUrl(url)).thenReturn(Optional.empty());
+        when(codeGenerator.generate()).thenReturn(candidate);
+        when(repository.insertGenerated(candidate, url)).thenReturn(Optional.empty());
+        when(repository.findByShortCode(candidate)).thenReturn(Optional.empty());
+
+        UrlShortenerService.CodeGenerationException exception = assertThrows(
+                UrlShortenerService.CodeGenerationException.class,
+                () -> service.shorten(url, null));
+
+        assertEquals("database rejected a unique generated mapping", exception.getMessage());
+        verify(codeGenerator).generate();
     }
 
     @ParameterizedTest

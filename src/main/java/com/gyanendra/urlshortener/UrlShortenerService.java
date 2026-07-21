@@ -12,17 +12,16 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 class UrlShortenerService {
 
-    private static final char[] BASE62_ALPHABET =
-            "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
     private static final Pattern CUSTOM_ALIAS = Pattern.compile("^[0-9A-Za-z]{3,32}$");
     private static final int MAX_URL_LENGTH = 2048;
     private static final int MAX_GENERATION_ATTEMPTS = 100;
-    private static final long EIGHT_CHARACTER_START = 3_521_614_606_208L;
 
     private final UrlMappingRepository repository;
+    private final ShortCodeGenerator codeGenerator;
 
-    UrlShortenerService(UrlMappingRepository repository) {
+    UrlShortenerService(UrlMappingRepository repository, ShortCodeGenerator codeGenerator) {
         this.repository = repository;
+        this.codeGenerator = codeGenerator;
     }
 
     @Transactional
@@ -49,12 +48,8 @@ class UrlShortenerService {
 
     private ShortenResult createGenerated(String normalizedUrl) {
         for (int attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt++) {
-            long id = repository.nextId();
-            if (id >= EIGHT_CHARACTER_START) {
-                throw new CodeGenerationException("seven-character code space is exhausted");
-            }
-            String code = encodeBase62(id);
-            Optional<UrlMapping> inserted = repository.insertGenerated(id, code, normalizedUrl);
+            String code = codeGenerator.generate();
+            Optional<UrlMapping> inserted = repository.insertGenerated(code, normalizedUrl);
             if (inserted.isPresent()) {
                 return new ShortenResult(inserted.get(), true);
             }
@@ -66,9 +61,9 @@ class UrlShortenerService {
             if (repository.findByShortCode(code).isEmpty()) {
                 throw new CodeGenerationException("database rejected a unique generated mapping");
             }
-            // A custom alias claimed this Base62 value. Try the next sequence ID.
+            // The candidate is already in the shared generated/custom-alias namespace. Retry.
         }
-        throw new CodeGenerationException("too many generated codes are occupied by custom aliases");
+        throw new CodeGenerationException("unable to allocate a unique short code after 100 attempts");
     }
 
     private ShortenResult createCustom(String normalizedUrl, String customAlias) {
@@ -138,22 +133,6 @@ class UrlShortenerService {
         } catch (URISyntaxException exception) {
             throw new InvalidRequestException("url is malformed");
         }
-    }
-
-    static String encodeBase62(long value) {
-        if (value < 0) {
-            throw new IllegalArgumentException("Base62 value must not be negative");
-        }
-        if (value == 0) {
-            return String.valueOf(BASE62_ALPHABET[0]);
-        }
-
-        StringBuilder encoded = new StringBuilder();
-        while (value > 0) {
-            encoded.append(BASE62_ALPHABET[(int) (value % BASE62_ALPHABET.length)]);
-            value /= BASE62_ALPHABET.length;
-        }
-        return encoded.reverse().toString();
     }
 
     private static boolean isDefaultPort(String scheme, int port) {

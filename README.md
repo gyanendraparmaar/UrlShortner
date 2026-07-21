@@ -1,11 +1,11 @@
 # URL Shortener
 
-A small Java service that stores long URLs in PostgreSQL, returns short Base62 codes, and permanently redirects those codes to their original URLs. The design follows the URL-shortener flow from Alex Xu's *System Design Interview*: a relational mapping table, unique numeric IDs converted to Base62, duplicate lookup before creation, and a read-oriented redirect endpoint.
+A small Java service that stores long URLs in PostgreSQL, returns short Base62 codes, and permanently redirects those codes to their original URLs. The design follows the URL-shortener flow from Alex Xu's *System Design Interview*: a relational mapping table, collision-safe code allocation, duplicate lookup before creation, and a read-oriented redirect endpoint.
 
 ## Requirements
 
 - Java 21 or newer
-- Docker with Docker Compose
+- Docker with Docker Compose (only for running the application locally)
 
 Maven does not need to be installed; the repository includes the Maven wrapper.
 
@@ -44,13 +44,13 @@ curl -i -X POST http://localhost:8080/shorten \
   -d '{"url":"https://example.com/articles/42"}'
 ```
 
-For a fresh database, the response is:
+The generated code is random, so a response looks like:
 
 ```http
 HTTP/1.1 201 Created
 Content-Type: application/json
 
-{"code":"1000000","short_url":"http://localhost:8080/1000000","url":"https://example.com/articles/42","created":true}
+{"code":"0aA1bB2cC3d","short_url":"http://localhost:8080/0aA1bB2cC3d","url":"https://example.com/articles/42","created":true}
 ```
 
 ### Create a custom alias
@@ -66,7 +66,7 @@ curl -i -X POST http://localhost:8080/shorten \
 ### Follow a short code
 
 ```bash
-curl -i http://localhost:8080/1000000
+curl -i http://localhost:8080/0aA1bB2cC3d
 ```
 
 Known codes return `301 Moved Permanently` with the original URL in the `Location` header. Unknown codes return a JSON `404 Not Found` response.
@@ -81,19 +81,19 @@ Known codes return `301 Moved Permanently` with the original URL in the `Locatio
 
 ## Why generated codes do not collide
 
-PostgreSQL's sequence supplies a different numeric ID to every caller, including concurrent application instances. Base62 conversion is one-to-one, so distinct IDs produce distinct generated codes. The sequence starts at `62^6`, making generated codes seven characters long and giving the seven-character range roughly 3.5 trillion values, which covers the 365-billion-record estimate in Alex Xu's design.
+Each generated code contains 11 Base62 characters selected with Java's `SecureRandom`. That provides about 65.5 bits of entropy (`62^11` possibilities), keeps public codes independent of internal row IDs, and prevents a caller from enumerating links or inferring allocation volume.
 
-The database also has unique constraints on both `short_code` and `long_url`. A custom alias can claim a value that a future Base62 ID would produce; if that happens, `INSERT ... ON CONFLICT DO NOTHING` prevents an overwrite and the generator advances to the next sequence value. The database constraint is therefore the final concurrency guard.
+The database has unique constraints on both `short_code` and `long_url`. `INSERT ... ON CONFLICT DO NOTHING` prevents overwrites if a random candidate or custom alias is already present, and the service generates another candidate. Retries are bounded at 100 attempts. The database constraint remains the final concurrency guard across concurrent application instances.
 
 ## Test
 
-Make sure Docker is running, then execute:
+With Java 21 available, execute:
 
 ```bash
 ./mvnw test
 ```
 
-The suite includes service and controller tests plus Testcontainers integration tests against PostgreSQL 17.10. It covers Base62 boundaries, URL validation and normalization, generated and custom codes, concurrent duplicates, conflicting aliases, malformed JSON, 301 redirects, 404 responses, application-context restart persistence, and a custom/generated code collision.
+The suite needs neither Docker nor a locally installed database. It starts an embedded PostgreSQL 17.10 process on a random port, applies the real Flyway migrations, and then runs the service, controller, and integration tests. Coverage includes secure code shape, deterministic collision retries and exhaustion, URL validation and normalization, generated and custom codes, concurrent duplicates, conflicting aliases, malformed JSON, 301 redirects, 404 responses, and application-context restart persistence.
 
 Build the runnable JAR with:
 

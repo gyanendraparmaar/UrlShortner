@@ -29,7 +29,7 @@ class UrlShortenerControllerTest {
     void createsAShortUrl() throws Exception {
         when(service.shorten("https://example.com/path", null)).thenReturn(
                 new UrlShortenerService.ShortenResult(
-                        new UrlMapping("1000000", "https://example.com/path"),
+                        new UrlMapping("0aA1bB2cC3d", "https://example.com/path"),
                         true));
 
         mockMvc.perform(post("/shorten")
@@ -38,8 +38,8 @@ class UrlShortenerControllerTest {
                                 {"url":"https://example.com/path"}
                                 """))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.code").value("1000000"))
-                .andExpect(jsonPath("$.short_url").value("http://localhost:8080/1000000"))
+                .andExpect(jsonPath("$.code").value("0aA1bB2cC3d"))
+                .andExpect(jsonPath("$.short_url").value("http://localhost:8080/0aA1bB2cC3d"))
                 .andExpect(jsonPath("$.url").value("https://example.com/path"))
                 .andExpect(jsonPath("$.created").value(true));
     }
@@ -48,7 +48,7 @@ class UrlShortenerControllerTest {
     void returnsOkForAnExistingMapping() throws Exception {
         when(service.shorten("https://example.com", null)).thenReturn(
                 new UrlShortenerService.ShortenResult(
-                        new UrlMapping("1000000", "https://example.com"),
+                        new UrlMapping("0aA1bB2cC3d", "https://example.com"),
                         false));
 
         mockMvc.perform(post("/shorten")
@@ -62,9 +62,9 @@ class UrlShortenerControllerTest {
 
     @Test
     void permanentlyRedirectsKnownCodes() throws Exception {
-        when(service.resolve("1000000")).thenReturn("https://example.com/path");
+        when(service.resolve("0aA1bB2cC3d")).thenReturn("https://example.com/path");
 
-        mockMvc.perform(get("/1000000"))
+        mockMvc.perform(get("/0aA1bB2cC3d"))
                 .andExpect(status().isMovedPermanently())
                 .andExpect(header().string("Location", "https://example.com/path"));
     }

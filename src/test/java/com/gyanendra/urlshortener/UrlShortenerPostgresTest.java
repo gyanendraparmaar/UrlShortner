@@ -5,10 +5,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.mockito.Mockito.doReturn;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -16,6 +19,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,26 +31,26 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@Testcontainers
 class UrlShortenerPostgresTest {
 
-    @Container
-    static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:17.10-alpine");
+    private static final EmbeddedPostgres POSTGRES = startPostgres();
 
     @DynamicPropertySource
     static void configurePostgres(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
-        registry.add("spring.datasource.username", POSTGRES::getUsername);
-        registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("spring.datasource.url", () -> POSTGRES.getJdbcUrl("postgres", "postgres"));
+        registry.add("spring.datasource.username", () -> "postgres");
+        registry.add("spring.datasource.password", () -> "postgres");
+    }
+
+    @AfterAll
+    static void stopPostgres() throws IOException {
+        POSTGRES.close();
     }
 
     @Autowired
@@ -61,6 +65,9 @@ class UrlShortenerPostgresTest {
     @Autowired
     private UrlShortenerService service;
 
+    @MockitoSpyBean
+    private ShortCodeGenerator codeGenerator;
+
     @BeforeEach
     void resetDatabase() {
         jdbcTemplate.execute("TRUNCATE TABLE url_mappings RESTART IDENTITY");
@@ -74,11 +81,13 @@ class UrlShortenerPostgresTest {
                                 {"url":"https://example.com/articles/42"}
                                 """))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.code").value("1000000"))
                 .andReturn();
 
         JsonNode response = objectMapper.readTree(shortened.getResponse().getContentAsString());
         String code = response.get("code").asText();
+        org.assertj.core.api.Assertions.assertThat(code)
+                .hasSize(ShortCodeGenerator.CODE_LENGTH)
+                .matches("[0-9A-Za-z]+$");
 
         mockMvc.perform(get("/" + code))
                 .andExpect(status().isMovedPermanently())
@@ -89,13 +98,16 @@ class UrlShortenerPostgresTest {
 
     @Test
     void normalizesDuplicatesAndReturnsTheOriginalCode() throws Exception {
-        mockMvc.perform(post("/shorten")
+        MvcResult first = mockMvc.perform(post("/shorten")
                         .contentType("application/json")
                         .content("""
                                 {"url":"HTTPS://Example.COM:443/path"}
                                 """))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.code").value("1000000"));
+                .andReturn();
+        String code = objectMapper.readTree(first.getResponse().getContentAsString())
+                .get("code")
+                .asText();
 
         mockMvc.perform(post("/shorten")
                         .contentType("application/json")
@@ -103,7 +115,7 @@ class UrlShortenerPostgresTest {
                                 {"url":"https://example.com/path"}
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("1000000"))
+                .andExpect(jsonPath("$.code").value(code))
                 .andExpect(jsonPath("$.created").value(false));
     }
 
@@ -145,21 +157,43 @@ class UrlShortenerPostgresTest {
     }
 
     @Test
-    void advancesPastAGeneratedCodeClaimedByACustomAlias() throws Exception {
+    void generatesAnElevenCharacterBase62Code() throws Exception {
+        MvcResult result = mockMvc.perform(post("/shorten")
+                        .contentType("application/json")
+                        .content("""
+                                {"url":"https://example.com/generated"}
+                                """))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String code = objectMapper.readTree(result.getResponse().getContentAsString())
+                .get("code")
+                .asText();
+        org.assertj.core.api.Assertions.assertThat(code)
+                .hasSize(ShortCodeGenerator.CODE_LENGTH)
+                .matches("[0-9A-Za-z]+$");
+    }
+
+    @Test
+    void retriesWhenAGeneratedCodeIsClaimedByACustomAlias() throws Exception {
+        String claimedCandidate = "Aa0Bb1Cc2Dd";
+        String nextCandidate = "Ee3Ff4Gg5Hh";
+        doReturn(claimedCandidate, nextCandidate).when(codeGenerator).generate();
+
         mockMvc.perform(post("/shorten")
                         .contentType("application/json")
                         .content("""
-                                {"url":"https://example.com/custom","custom_alias":"1000001"}
+                                {"url":"https://example.com/custom","custom_alias":"Aa0Bb1Cc2Dd"}
                                 """))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(post("/shorten")
                         .contentType("application/json")
                         .content("""
-                                {"url":"https://example.com/generated"}
+                                {"url":"https://example.com/generated-after-collision"}
                                 """))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.code").value("1000002"));
+                .andExpect(jsonPath("$.code").value(nextCandidate));
     }
 
     @Test
@@ -238,11 +272,19 @@ class UrlShortenerPostgresTest {
         return new SpringApplicationBuilder(UrlShortenerApplication.class)
                 .web(WebApplicationType.NONE)
                 .run(
-                        "--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
-                        "--spring.datasource.username=" + POSTGRES.getUsername(),
-                        "--spring.datasource.password=" + POSTGRES.getPassword(),
+                        "--spring.datasource.url=" + POSTGRES.getJdbcUrl("postgres", "postgres"),
+                        "--spring.datasource.username=postgres",
+                        "--spring.datasource.password=postgres",
                         "--app.base-url=http://localhost:8080",
                         "--spring.main.banner-mode=off");
+    }
+
+    private static EmbeddedPostgres startPostgres() {
+        try {
+            return EmbeddedPostgres.start();
+        } catch (IOException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
     }
 
     private static void await(CountDownLatch latch) {
